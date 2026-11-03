@@ -1,124 +1,50 @@
 (() => {
   'use strict';
-  const boxes = [...document.querySelectorAll('input[data-task]')];
-  const storageKey = 'study-calendar-static-2026-v2';
-  let progress = {};
-  try { progress = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch (_) {}
-  let client = null, user = null, role = null;
   const $ = id => document.getElementById(id);
-  const config = window.XIAOSHU_CONFIG || {};
-  const configured = !!(config.supabaseUrl && config.supabaseAnonKey);
-  const state = $('cloud-state'), panel = $('auth-panel'), authBtn = $('auth-toggle'), logoutBtn = $('logout');
-  const notify = msg => { $('auth-notice').textContent = msg; };
-  function refresh() {
-    const done = boxes.filter(b => b.checked).length;
-    $('progress-label').textContent = `已完成 ${done} / ${boxes.length} 项`;
-    $('progress-num').textContent = Math.round(100 * done / boxes.length) + '%';
-    $('progress-fill').style.width = (100 * done / boxes.length) + '%';
-    document.querySelectorAll('.day.busy').forEach(day => {
-      const id = day.getAttribute('href').slice(1);
-      const tasks = [...document.querySelectorAll('#' + id + ' input[data-task]')];
-      day.dataset.completed = tasks.length && tasks.every(x => x.checked) ? 'yes' : 'no';
-    });
+  const cfg = window.XIAOSHU_CONFIG || {};
+  const client = cfg.supabaseUrl && cfg.supabaseAnonKey && window.supabase?.createClient ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey) : null;
+  const today = new Date();
+  const selected = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let user = null, role = null, tasks = [], messages = [], request = 0;
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const same = (a,b) => iso(a) === iso(b);
+  const setDate = d => { selected.setFullYear(d.getFullYear(),d.getMonth(),d.getDate()); renderCalendar(); loadDate(); };
+  const status = (id,text) => { $(id).textContent = text; };
+  function renderCalendar(){
+    const y=selected.getFullYear(), m=selected.getMonth(), days=new Date(y,m+1,0).getDate();
+    $('month-title').textContent=`${y} 年 ${m+1} 月`;
+    $('year-select').value=y; $('month-select').value=m+1; fillDays(); $('day-select').value=selected.getDate();
+    const cal=$('calendar'); cal.replaceChildren();
+    for(const name of ['一','二','三','四','五','六','日']){const el=document.createElement('div');el.className='weekday';el.textContent=name;cal.append(el);}
+    for(let i=0;i<(new Date(y,m,1).getDay()+6)%7;i++){const el=document.createElement('div');el.className='blank';cal.append(el);}
+    for(let day=1;day<=days;day++){const date=new Date(y,m,day),b=document.createElement('button');b.type='button';b.className='day'+(same(date,selected)?' selected':'')+(same(date,today)?' today':'');b.innerHTML=`<span>${day}</span><small></small>`;b.onclick=()=>setDate(date);cal.append(b);}
+    $('selected-date').textContent=`${y} 年 ${m+1} 月 ${selected.getDate()} 日`;
+    $('day-weekday').textContent=['星期日','星期一','星期二','星期三','星期四','星期五','星期六'][selected.getDay()];
   }
-  function localSave() { try { localStorage.setItem(storageKey, JSON.stringify(progress)); } catch (_) {} }
-  function applyLocal() { boxes.forEach(b => { b.checked = !!progress[b.dataset.task]; }); refresh(); }
-  boxes.forEach(b => b.addEventListener('change', async () => {
-    if (client && user && role !== 'owner') { b.checked = !b.checked; alert('只有小舒可以修改打卡进度。'); return; }
-    const was = !b.checked;
-    progress[b.dataset.task] = b.checked; localSave(); refresh();
-    if (client && user) {
-      const { error } = await client.from('task_checks').upsert({ task_id: Number(b.dataset.task), completed: b.checked }, { onConflict: 'task_id' });
-      if (error) { b.checked = was; progress[b.dataset.task] = was; localSave(); refresh(); alert('云端保存失败：' + error.message); }
-    }
-  }));
-  $('reset').addEventListener('click', async () => {
-    if (!confirm('确定清空全部打卡记录吗？')) return;
-    if (client && user && role !== 'owner') { alert('只有小舒可以重置打卡。'); return; }
-    if (client && user) {
-      const { error } = await client.from('task_checks').delete().gte('task_id', 1);
-      if (error) { alert('云端重置失败：' + error.message); return; }
-    }
-    progress = {}; try { localStorage.removeItem(storageKey); } catch (_) {}
-    applyLocal();
-  });
-  applyLocal();
-  authBtn.onclick = () => {
-    if (!configured) { alert('尚未配置 Supabase。请先按照说明文件设置 config.js 和数据库。'); return; }
-    panel.classList.toggle('open');
-  };
-  function boardState(day, text) { $('board-status-' + day).textContent = text; }
-  function safeDate(value) { try { return new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch(_) { return ''; } }
-  function renderMessages(day, rows) {
-    const target = $('messages-' + day); target.replaceChildren();
-    if (!rows.length) { boardState(day, '还没有留言，来写下第一句吧。'); return; }
-    boardState(day, `共 ${rows.length} 条留言`);
-    for (const r of rows) {
-      const item = document.createElement('div'); item.className = 'message';
-      const by = document.createElement('div'); by.className = 'author';
-      by.textContent = (r.author_id === user?.id ? '我' : '对方') + ' · ' + safeDate(r.created_at);
-      const content = document.createElement('div'); content.className = 'content'; content.textContent = r.content;
-      item.append(by, content); target.append(item);
-    }
+  function fillDays(){const sel=$('day-select'),end=new Date(selected.getFullYear(),selected.getMonth()+1,0).getDate();sel.replaceChildren();for(let d=1;d<=end;d++)sel.add(new Option(`${d} 日`,d));}
+  function renderTasks(){
+    $('day-count').textContent=`${tasks.length} 项待办`;
+    $('task-list').replaceChildren();
+    if(!tasks.length){status('task-status',role?'这一天还没有待办。':'登录后查看共享待办。');return;}
+    status('task-status','');
+    for(const task of tasks){const row=document.createElement('div');row.className='task'+(task.completed?' done':'');const check=document.createElement('input');check.type='checkbox';check.checked=task.completed;check.disabled=role!=='owner';check.setAttribute('aria-label','完成'+task.title);check.onchange=()=>updateTask(task,{completed:check.checked});const title=document.createElement('span');title.textContent=task.title;row.append(check,title);if(role==='owner'){const actions=document.createElement('div');actions.className='task-actions';const edit=document.createElement('button');edit.type='button';edit.textContent='修改';edit.onclick=()=>{const value=prompt('修改待办',task.title)?.trim();if(value && value!==task.title)updateTask(task,{title:value.slice(0,160)});};const del=document.createElement('button');del.type='button';del.textContent='删除';del.onclick=()=>{if(confirm(`删除“${task.title}”？`))deleteTask(task.id);};actions.append(edit,del);row.append(actions);} $('task-list').append(row);}
   }
-  async function loadMessages(day) {
-    if (!client || !user) return;
-    const { data, error } = await client.from('board_messages').select('id,author_id,content,created_at').eq('day', day).order('created_at',{ascending:true}).limit(200);
-    if (error) { boardState(day, '读取失败：' + error.message); return; }
-    renderMessages(day, data || []);
-  }
-  async function loadAll() {
-    if (!client || !user) return;
-    const { data: member, error: memberError } = await client.from('board_members').select('role').eq('user_id',user.id).maybeSingle();
-    if (memberError || !member) {
-      role = null; state.textContent = '账号尚未授权，请在数据库成员表中添加此账号';
-      document.querySelectorAll('.send').forEach(b => b.disabled = true);
-      return;
-    }
-    role = member.role;
-    state.textContent = `共享模式 · ${role === 'owner' ? '小舒' : '访客'}已登录`;
-    logoutBtn.hidden = false; authBtn.textContent = '账号设置'; panel.classList.remove('open');
-    boxes.forEach(b => { b.disabled = role !== 'owner'; });
-    const { data: checks, error } = await client.from('task_checks').select('task_id,completed');
-    if (!error) {
-      progress = {}; for (const row of checks || []) progress[row.task_id] = row.completed;
-      localSave(); applyLocal();
-    } else state.textContent = '打卡同步失败：' + error.message;
-    document.querySelectorAll('.send').forEach(b => b.disabled = false);
-    await Promise.all([...Array(30)].map((_, i) => loadMessages(i + 1)));
-  }
-  document.querySelectorAll('.send').forEach(btn => btn.addEventListener('click', async () => {
-    const day = Number(btn.dataset.day), input = $('message-input-' + day), content = input.value.trim();
-    if (!user || !role) { alert('请先登录已授权的共享账号。'); return; }
-    if (!content) { input.focus(); return; }
-    btn.disabled = true; boardState(day, '正在发送…');
-    const { error } = await client.from('board_messages').insert({ day, content, author_id:user.id });
-    btn.disabled = false;
-    if (error) boardState(day, '发送失败：' + error.message);
-    else { input.value = ''; await loadMessages(day); }
-  }));
-  if (!configured) return;
-  if (!window.supabase || !window.supabase.createClient) { state.textContent = '数据库连接脚本未加载，请使用 Safari 打开公开网站'; return; }
-  client = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
-  state.textContent = '数据库已配置 · 请登录共享账号';
-  $('login').onclick = async () => {
-    const email = $('email').value.trim(), password = $('password').value;
-    if (!email || !password) { notify('请填写邮箱和密码。'); return; }
-    $('login').disabled = true; notify('正在登录…');
-    const { data, error } = await client.auth.signInWithPassword({email,password});
-    $('login').disabled = false;
-    if (error) { notify('登录失败：' + error.message); return; }
-    user = data.user; await loadAll();
-  };
-  logoutBtn.onclick = async () => {
-    await client.auth.signOut(); user=null; role=null; logoutBtn.hidden=true;
-    state.textContent = '已退出共享账号'; authBtn.textContent = '共享留言登录';
-    boxes.forEach(b => b.disabled=false);
-    document.querySelectorAll('.send').forEach(b => b.disabled=true);
-    document.querySelectorAll('.messages').forEach(el => el.replaceChildren());
-    document.querySelectorAll('.board-status').forEach(el => el.textContent='登录后查看共享留言');
-  };
-  client.auth.getUser().then(async ({data,error}) => {if(!error && data.user) {user=data.user;await loadAll();}});
-  document.addEventListener('visibilitychange', () => {if(!document.hidden && user && role) { const hash = location.hash.match(/day-(\d+)/); if(hash) loadMessages(Number(hash[1])); }});
-  window.addEventListener('hashchange', () => {const match = location.hash.match(/day-(\d+)/); if (match && user && role) loadMessages(Number(match[1]));});
+  function renderMessages(){const box=$('messages');box.replaceChildren();for(const message of messages){const item=document.createElement('div');item.className='message';const meta=document.createElement('small');meta.textContent=`${message.author_id===user?.id?'我':'对方'} · ${new Date(message.created_at).toLocaleString('zh-CN')}`;const content=document.createElement('span');content.textContent=message.content;item.append(meta,content);box.append(item);} status('board-status',role?messages.length?`共 ${messages.length} 条留言`:'这一天还没有留言。':'登录后查看共享留言');}
+  async function loadDate(){const seq=++request;tasks=[];messages=[];renderTasks();renderMessages();if(!client||!user||!role)return;const date=iso(selected);const [t,m]=await Promise.all([client.from('task_items').select('id,title,completed').eq('task_date',date).order('id'),client.from('board_messages').select('id,author_id,content,created_at').eq('message_date',date).order('created_at')]);if(seq!==request)return;if(t.error)status('task-status','读取待办失败：'+t.error.message);else{tasks=t.data||[];renderTasks();}if(m.error)status('board-status','读取留言失败：'+m.error.message);else{messages=m.data||[];renderMessages();}markCalendar();}
+  async function markCalendar(){if(!client||!user||!role)return;const y=selected.getFullYear(),m=selected.getMonth(),first=iso(new Date(y,m,1)),last=iso(new Date(y,m+1,0));const {data}=await client.from('task_items').select('task_date,completed').gte('task_date',first).lte('task_date',last);if(y!==selected.getFullYear()||m!==selected.getMonth())return;const counts=new Map();for(const row of data||[]){const p=counts.get(row.task_date)||{all:0,done:0};p.all++;if(row.completed)p.done++;counts.set(row.task_date,p);}for(const b of $('calendar').querySelectorAll('.day')){const day=Number(b.querySelector('span').textContent),p=counts.get(iso(new Date(y,m,day)));b.querySelector('small').textContent=p?`${p.done}/${p.all} 完成`:'';}$('month-count').textContent=`本月 ${[...counts.values()].reduce((n,p)=>n+p.all,0)} 项待办`;}
+  async function updateTask(task,changes){const {error}=await client.from('task_items').update(changes).eq('id',task.id);if(error){status('task-status','保存失败：'+error.message);return;}await loadDate();}
+  async function deleteTask(id){const {error}=await client.from('task_items').delete().eq('id',id);if(error){status('task-status','删除失败：'+error.message);return;}await loadDate();}
+  $('task-form').onsubmit=async e=>{e.preventDefault();if(role!=='owner')return;const title=$('task-title').value.trim();if(!title)return;const {error}=await client.from('task_items').insert({task_date:iso(selected),title});if(error){status('task-status','添加失败：'+error.message);return;}$('task-title').value='';await loadDate();};
+  $('message-form').onsubmit=async e=>{e.preventDefault();if(!role)return;const content=$('message-input').value.trim();if(!content)return;$('send').disabled=true;const {error}=await client.from('board_messages').insert({message_date:iso(selected),author_id:user.id,content});$('send').disabled=false;if(error){status('board-status','发送失败：'+error.message);return;}$('message-input').value='';await loadDate();};
+  $('auth-toggle').onclick=()=>{if(!client){alert('数据库尚未配置，请检查 config.js。');return;}$('auth-panel').hidden=!$('auth-panel').hidden;};
+  $('login').onclick=async()=>{const email=$('email').value.trim(),password=$('password').value;if(!email||!password){status('auth-notice','请输入邮箱和密码。');return;}$('login').disabled=true;const {data,error}=await client.auth.signInWithPassword({email,password});$('login').disabled=false;$('password').value='';if(error){status('auth-notice','登录失败：'+error.message);return;}await authorize(data.user);};
+  $('logout').onclick=async()=>{await client.auth.signOut();user=null;role=null;tasks=[];messages=[];$('logout').hidden=true;$('task-form').hidden=true;$('send').disabled=true;status('cloud-state','未登录');renderTasks();renderMessages();markCalendar();};
+  async function authorize(u){const {data,error}=await client.from('board_members').select('role').eq('user_id',u.id).maybeSingle();if(error||!data){await client.auth.signOut();status('auth-notice','此账号尚未加入共享空间。');return;}user=u;role=data.role;$('logout').hidden=false;$('task-form').hidden=role!=='owner';$('send').disabled=false;$('auth-panel').hidden=true;status('cloud-state',role==='owner'?'已登录 · 可编辑待办':'已登录 · 可留言');await loadDate();}
+  for(let y=today.getFullYear()-5;y<=today.getFullYear()+10;y++)$('year-select').add(new Option(`${y} 年`,y));for(let m=1;m<=12;m++)$('month-select').add(new Option(`${m} 月`,m));
+  $('year-select').onchange=()=>{const d=Math.min(selected.getDate(),new Date(Number($('year-select').value),selected.getMonth()+1,0).getDate());setDate(new Date(Number($('year-select').value),selected.getMonth(),d));};
+  $('month-select').onchange=()=>{const y=selected.getFullYear(),m=Number($('month-select').value)-1,d=Math.min(selected.getDate(),new Date(y,m+1,0).getDate());setDate(new Date(y,m,d));};
+  $('go-date').onclick=()=>setDate(new Date(Number($('year-select').value),Number($('month-select').value)-1,Number($('day-select').value)));
+  $('prev-month').onclick=()=>setDate(new Date(selected.getFullYear(),selected.getMonth()-1,Math.min(selected.getDate(),new Date(selected.getFullYear(),selected.getMonth(),0).getDate())));
+  $('next-month').onclick=()=>setDate(new Date(selected.getFullYear(),selected.getMonth()+1,Math.min(selected.getDate(),new Date(selected.getFullYear(),selected.getMonth()+2,0).getDate())));
+  renderCalendar();renderTasks();renderMessages();status('cloud-state',client?'未登录':'数据库尚未配置');if(client)client.auth.getUser().then(({data})=>{if(data.user)authorize(data.user);});
 })();
