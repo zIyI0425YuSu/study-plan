@@ -1,0 +1,24 @@
+小舒的期中复习计划网站｜部署与共享设置
+
+【第一步：先上线】
+1. 打开 https://app.netlify.com/drop
+2. 选择本压缩包（若平台要求上传文件夹，则先解压，选择包含 index.html 的文件夹）。
+3. 平台会生成一个公开网址。可以把网址分享给女朋友。
+4. 此时日历和本地打卡可用，但留言不能跨设备同步。
+
+【第二步：配置两个人共享留言】
+1. 打开 https://supabase.com/dashboard 创建 Project。
+2. 在 SQL Editor 执行本文件夹内的 supabase-setup.sql。
+3. Authentication > Users，创建你和女朋友的两个邮箱账号（可发送邀请邮件）。
+4. 在 SQL Editor 按文件末尾注释示例，将两个邮箱加入 board_members：你的 role 是 owner，女朋友是 guest。
+5. Project Settings / Connect 中找到 Project URL 和 publishable key（或旧版 anon key）。
+6. 在 config.js 中填入 supabaseUrl 和 supabaseAnonKey（不要填 service_role 或 secret key！）。
+7. 将更新后的整个文件夹重新上传 Netlify，覆盖部署同一个站点。
+8. 你们分别在网站上登录账号即可共享留言；只有 owner 可以同步打卡。
+
+【使用提示】
+- 留言框每个日期独立；超出高度可以在留言框内部滚动。
+- 留言内容不会显示给未授权账号，数据库启用了 RLS。
+- 网站网址本身默认对外公开，访问日历无需登录；不要在任务标题里放隐私信息。
+- 旧版 HTML 的本地打卡记录不保证迁移；云端首次登录时会以云端记录为准。
+- 如果在 iPad 的文件预览里打不开交互，请在 Safari 中打开上线后的网址。
